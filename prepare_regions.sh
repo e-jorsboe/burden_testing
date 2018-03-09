@@ -33,12 +33,14 @@
 ##
 ## Date: 2017.08.03 by Daniel Suveges. ds26@sanger.ac.uk
 ##
-script_version=2.0
-last_modified=2017.08.03
+script_version=3.0
+last_modified=2018.03.09
+
+## This script has been updated to the most recent GENCODE_release (27) and Ensembl_release (91)
 
 ## Built in versions:
-GENCODE_release=25
-Ensembl_release=84 
+GENCODE_release=27
+Ensembl_release=91
 
 # Get script dir:
 scriptDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -46,7 +48,7 @@ scriptDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 ## printing out information if no parameter is provided:
 function usage {
     echo ""
-    echo "Usage: $0 -G <GTEx file> -t <targetdir>"
+    echo "Usage: $0 -G <GTEx file> -t <targetdir> -b <build> -E <EnsembleFiles>"
     echo ""
     echo " This script was written to prepare input file for the burden testing pipeline."
     echo ""
@@ -62,12 +64,12 @@ function usage {
     echo ""
     echo ""
     echo "Workflow:"
-    echo "  1: Downloads v25 GENCODE release."
-    echo "  2: Downloads V84 Ensembl Regulation release."
+    echo "  1: Downloads v${GENCODE_release} GENCODE release."
+    echo "  2: Downloads V${Ensembl_release} Ensembl Regulation release."
     echo "  3: Downloads newest APPRIS release"
     echo "  4: Adds Appris annotation to Gencode transcripts."
     echo "  5: Creates cell-specific regulatory features."
-    echo "  6: Lifts over GTEx coordinates to GRCh38."
+    echo "  6: Lifts over GTEx coordinates to GRCh38, if build 38 is chosen."
     echo "  7: Links regulatory features to genes based on GTEx data."
     echo "  8: Links regulatory features to genes based on overlapping."
     echo "  9: Combined GENCODE, GTEx and Overlap data together into a single bedfile."
@@ -86,7 +88,6 @@ line contains all information of the association."
     echo "  -other sources contain information about the evidence. (linked rsID, tissue in
     which the feature in active etc.)"
     echo ""
-    echo "WARNINGS: ALL COORDINATES ARE BASED ON GRCH38 BUILD!"
     echo ""
     exit 0
 }
@@ -148,6 +149,8 @@ while getopts "G:t:h" optname; do
     case "$optname" in
         "G" ) GTExFile="${OPTARG}" ;;
         "t" ) targetDir="${OPTARG}" ;;
+	"B" ) build="${OPTARG}" ;;
+	"E" ) EnsembleFiles="${OPTARG}" ;;
         "h" ) usage ;;
         "?" ) usage ;;
         *) usage ;;
@@ -173,6 +176,15 @@ elif [[ ! -e "${GTExFile}" ]]; then
     exit 1
 fi
 
+if [[ -z "${build}" ]]; then
+    echo "[Error] You need to specify a build - either 37 or 38!"
+    exit 1
+fi
+
+if [ $build != "37" ] && [ $build != "38" ]; then
+    echo "[Error] Build must be either 37 or 38!"
+    exit 1
+fi
 
 # Checking required commands:
 checkCommand tabix
@@ -190,8 +202,15 @@ info "Working directory: ${targetDir}/${today}\n\n"
 # Get the most recent version of the data:
 mkdir -p ${targetDir}/${today}/GENCODE
 info "Downloading GENCODE annotation from http://www.gencodegenes.org/. Release version: ${GENCODE_release}... "
-wget -q ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_${GENCODE_release}/gencode.v${GENCODE_release}.annotation.gtf.gz \
+
+
+if [ $build == "37" ]; then
+    wget -q ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_${GENCODE_release}/GRCh37_mapping/gencode.v${GENCODE_release}lift37.annotation.gtf.gz -O ${targetDir}/${today}/GENCODE/gencode.v${GENCODE_release}.annotation.gtf.gz
+else
+    wget -q ftp://ftp.sanger.ac.uk/pub/gencode/Gencode_human/release_${GENCODE_release}/gencode.v${GENCODE_release}.annotation.gtf.gz \
         -O ${targetDir}/${today}/GENCODE/gencode.v${GENCODE_release}.annotation.gtf.gz
+fi
+
 echo -e "done."
 
 # Testing if the file is exists or not:
@@ -199,48 +218,82 @@ testFile "${targetDir}/${today}/GENCODE/gencode.v${GENCODE_release}.annotation.g
 
 # Counting genes in the dataset:
 genes=$(zcat ${targetDir}/${today}/GENCODE/gencode.v${GENCODE_release}.annotation.gtf.gz | awk '$3 == "gene"' | wc -l )
+
 info "Total number of genes in the GENCODE file: ${genes}\n\n"
+
+#############################################################################################
+## EnsemblRegulation is on GRCh38 has to be lifted to GRCh37 - via CrossMap - release 91
+#########################################################################################
 
 # prepare target directory:
 mkdir -p ${targetDir}/${today}/EnsemblRegulation
 info "Downloading cell specific regulatory features from Ensembl.\n"
 
-# Get list of all cell types:
-cells=$(curl -s ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/ \
-          | grep gff.gz \
-          | perl -lane 'print $F[-1]')
+# this one works for Ensemble release 91 - that looks different from 84
+if [ $build == "37" ] && [ ! -z "${EnsembleFiles}" ]; then
+    echo "You have to provide the Ensemble Regulation files lifted to GRCh37"
+    echo "The GRCh38 for release 91 can be dowloaded using this command:"
+    echo "wget -P  ${targetDir}/${today}/EnsemblRegulation -r -np -nH --cut-dirs=6 -R CHECKSUMS ftp://ftp.ensembl.org/pub/release-91/regulation/homo_sapiens/RegulatoryFeatureActivity/"
+    echo "This can be done using CrossMap and their chain files or their online converter."
+    echo "The files should be named the same way as the original GRCh38 files, however replacing 'GRCh38' with 'GRCh37'"
+    echo ""
+    exit 1
+elif [ $build == "38" ]; then
+    wget -P  ${targetDir}/${today}/EnsemblRegulation -r -np -nH --cut-dirs=6 -R CHECKSUMS ftp://ftp.ensembl.org/pub/release-91/regulation/homo_sapiens/RegulatoryFeatureActivity/
+else
+    # if GRCh37 EnsemblRegulation files present copy them
+    cp $EnsembleFiles/* ${targetDir}/${today}/EnsemblRegulation/
+fi
 
-# If there are no cell types present in the downloaded set, it means there were some problems. We are exiting.
-if [ -z "${cells}" ]; then
-    echo "[Error] No cell types were found in the Ensembl regulation folder."
+# If there are no files in the downloaded set, it means there were some problems. We are exiting.
+if [ `ls ${targetDir}/${today}/EnsemblRegulation/*.gff.gz | wc -l` == "0" ]; then
+    echo "[Error] No files were found in the Ensembl regulation folder."
     echo "[Error] URL: ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/regulatory_features/"
     echo "Exiting."
     exit 1
 fi
 
+
+## Get list of all cell types:
+#cells=$(curl -s ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/ \
+#          | grep gff.gz \
+#          | perl -lane 'print $F[-1]')
+
+## If there are no cell types present in the downloaded set, it means there were some problems. We are exiting.
+#if [ -z "${cells}" ]; then
+#    echo "[Error] No cell types were found in the Ensembl regulation folder."
+#    echo "[Error] URL: ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/regulatory_features/"
+#    echo "Exiting."
+#    exit 1
+#fi
+
 # Download all cell types:
-for cell in ${cells}; do
-    echo -n "."
-    # Download all cell type:
-    wget -q ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/${cell} \
-        -O ${targetDir}/${today}/EnsemblRegulation/${cell}
+#for cell in ${cells}; do
+#    echo -n "."
+#    # Download all cell type:
+#    wget -q ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/${cell} \
+#        -O ${targetDir}/${today}/EnsemblRegulation/${cell}
 
-    # Testing if the file is exists or not:
-    testFile "${targetDir}/${today}/EnsemblRegulation/${cell}"
-
-done
-echo "Done."
+#    # Testing if the file is exists or not:
+#    testFile "${targetDir}/${today}/EnsemblRegulation/${cell}"
+#
+#done
+#echo "Done."
 
 # Printing out report of the downloaded cell types:
 cellTypeCount=$(ls -la ${targetDir}/${today}/EnsemblRegulation/*gff.gz | wc -l)
 info "Number of cell types downloaded: ${cellTypeCount}.\n\n"
 
+#################################################################################################
+
 # Downloading APPRIS data:
 mkdir -p ${targetDir}/${today}/APPRIS
 info "Downloading APPRIS isoform data.\n"
-info "Download from the current release folder. Build: GRCh38, for GENCODE version: 24\n"
-wget -q http://apprisws.bioinfo.cnio.es/pub/current_release/datafiles/homo_sapiens/GRCh38/appris_data.principal.txt \
+info "Download from the current release folder. Build: GRCh${build}, for GENCODE version: ${GENCODE_release}\n"
+
+wget - http://apprisws.bioinfo.cnio.es/pub/current_release/datafiles/homo_sapiens/GRCh${build}/appris_data.principal.txt \
     -O ${targetDir}/${today}/APPRIS/appris_data.principal.txt
+
 
 # Testing if the file is exists or not:
 testFile "${targetDir}/${today}/APPRIS/appris_data.principal.txt"
@@ -314,12 +367,16 @@ info "Number of Appris annotated GENCODE annotations: ${appris_lines}\n\n"
 ##
 ## Step 7. Pre-processing cell specific regulatory data
 ##
+
+
 info "Aggregate cell specific information of regulatory features... "
-CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /RegulatoryFeatures_(.+).gff.gz/ ' )
+#CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /RegulatoryFeatures_(.+).gff.gz/ ' )
+# Adopted to new naming system from Ensembl for release 91
+CellTypes=$( find ${targetDir}/${today}/EnsemblRegulation/ | grep gff.gz$ | xargs -I % bash -c 'basename % | sed "s/homo_sapiens.GRCh...//g" | sed "s/.Regulatory_Build.regulatory_activity.20161111.gff.gz//g"' )
 for cell in ${CellTypes}; do
     export cell
     # parsing cell specific files (At this point we only consider active features. Although repressed regions might also be informative.):
-    zcat ${targetDir}/${today}/EnsemblRegulation/RegulatoryFeatures_${cell}.gff.gz | grep -i "=active" \
+    zcat ${targetDir}/${today}/EnsemblRegulation/homo_sapiens.GRCh${build}.${cell}.Regulatory_Build.regulatory_activity.20161111.gff.gz | grep -i "=active" \
         | perl -F"\t" -lane '$F[0] =~ s/^chr//;
                 next unless length($F[0]) < 3; # We skip irregular chromosome names.
                 $cell_type = $ENV{cell};
@@ -362,7 +419,7 @@ info "Number of cell specific regulatory features: $cellSpecFeatLines\n\n"
 
 # Instead of the single step we can generate a bedfile and run liftover
 # This step takes around 7 minutes.
-info "Mapping GTEx variants to GRCh38 build.\n"
+info "Mapping GTEx variants to GRCh38 build (if build 38 is selected).\n"
 info "Creating temporary bed file (~9 minutes)... "
 zcat ${GTExFile}  | perl -F"\t" -lane '
         if ($_ =~ /snpgenes/){
@@ -394,26 +451,29 @@ zcat ${GTExFile}  | perl -F"\t" -lane '
     '  | sort -k1,1 -k2,2n > ${targetDir}/${today}/processed/GTEx_temp.bed
 
 # Testing if output file has lines:
-testFileLines ${targetDir}/${today}/processed/GTEx_temp.bed
+testFileLines ${targetDir}/${today}/${targetDir}/${today}/processed/GTEx_temp.bed
 
 echo "Done."
 
-info "Running liftOver (~2 minutes).... "
-liftOver ${targetDir}/${today}/processed/GTEx_temp.bed ${scriptDir}/hg19ToHg38.over.chain \
-    ${targetDir}/${today}/processed/GTEx_temp_GRCh38.bed \
-    ${targetDir}/${today}/processed/GTEx_temp_failed_to_map.bed
-echo "Done."
+if [ $build == "38" ]; then
+    info "Running liftOver (~2 minutes).... "
+    liftOver ${targetDir}/${today}/processed/GTEx_temp.bed ${scriptDir}/hg19ToHg38.over.chain \
+	${targetDir}/${today}/processed/GTEx_temp_GRCh38tmp.bed \
+	${targetDir}/${today}/processed/GTEx_temp_failed_to_map.bed
+    mv ${targetDir}/${today}/processed/GTEx_temp_GRCh38tmp.bed ${targetDir}/${today}/processed/GTEx_temp.bed
+    echo "Done."
+fi
 
 # Generate report:
 failedMap=$(wc -l ${targetDir}/${today}/processed/GTEx_temp_failed_to_map.bed | awk '{print $1}')
-Mapped=$(wc -l ${targetDir}/${today}/processed/GTEx_temp_GRCh38.bed | awk '{print $1}')
+Mapped=$(wc -l ${targetDir}/${today}/processed/GTEx_temp.bed | awk '{print $1}')
 info "Successfully mapped GTEx variants: ${Mapped}, failed variants: ${failedMap}.\n\n"
 
 ##
 ## Step 9. Using intersectbed. Find overlap between GTEx variations and regulatory regions
 ##
 info "Linking genes to regulatory features using GTEx data... "
-intersectBed -wb -a ${targetDir}/${today}/processed/GTEx_temp_GRCh38.bed -b ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz \
+intersectBed -wb -a ${targetDir}/${today}/processed/GTEx_temp.bed -b ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz \
     | perl -MData::Dumper -MJSON -F"\t" -lane '
         # Name of the source is GTEx
         $source= "GTEx";
@@ -468,6 +528,7 @@ echo "Done."
 # Generate report:
 GTExLinkedFeatures=$( zcat ${targetDir}/${today}/processed/GTEx_Regulation_linked.txt.gz | wc -l | awk '{print $1}')
 info "Number of GTEx linked regulatory features: ${GTExLinkedFeatures}\n\n"
+
 
 ##
 ## Step 10. Using intersectbed. Find overlap between genes and regulatory regions
@@ -544,7 +605,7 @@ cat <(echo -e "# Regions file for burden testing. Created: ${today}
 # GENCODE version: v.${GENCODE_release}
 # Ensembl version: v.${Ensembl_release}
 # GTEx version: ${GTExRelease}
-#
+# build: ${build}
 # CHR\tSTART\tEND\tGENEID\tANNOTATION" ) ${targetDir}/${today}/Linked_features.bed | sponge ${targetDir}/${today}/Linked_features.bed
 
 # Compressing and indexing output file:
