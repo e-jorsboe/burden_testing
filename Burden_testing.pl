@@ -111,7 +111,7 @@ GetOptions(
     # vcf File:
     'vcfFile=s' => \$parameters->{"vcfFile"}, # In the updated version, the vcf file is no longer read from the config file.
 
-    # Asking for help:
+     # Asking for help:
     'help|h' => \$help
 );
 
@@ -191,10 +191,19 @@ while ( my $ID = <$INPUT> ){
     }
 
     # Once we have the genomic regions, the overlapping variants have to be extracted:
-    my $variants = &GetVariants($CollapsedBed, $parameters->{"vcfFile"});
-    
+
+    my $variants = &GetVariants($CollapsedBed, $parameters->{"vcfFile"});    
+    # Have to check if it is genotype probs being used
+    my @myvars = split("\n", $variants);
+
     # Filtering variants based on the provided parameters:
-    my ($hash, $genotypes) = &processVar($variants, $parameters);
+    if ((split(/\t/, $variant)[8]) eq "GT:GR" || (split(/\t/, $variant)[8]) eq "GR") {
+	# calling processVar for genotype probabilities
+	my ($hash, $genotypes) = &processVarV2($variants, $parameters);
+    } else{
+	my ($hash, $genotypes) = &processVar($variants, $parameters);
+    }
+
     # printf STDERR "%s\t%s\t%s\n", $gene_count, total_size($hash)/1024, total_size($AddScore)/1024; # Debug line.
     # The gene will be skipped if there are not suitable variations left:
     if (scalar keys %{$hash} < 2){
@@ -459,6 +468,7 @@ sub GetVariants {
     #    $distance += $end - $start;
     #    my $bcftoos_query = sprintf("tabix %s %s:%s-%s", $vcfFile, $chr, $start, $end);
     print  "$bcftoos_query\n" if $verbose;
+    # extract lines from vcf file using bcftools, get a long string with \n seperating them
     my $variations = `bash -O extglob -c \'$bcftoos_query\'`;
 
     print sprintf("[Info] Total covered genomic regions: %s bp\n", $distance) if $verbose;
@@ -466,6 +476,8 @@ sub GetVariants {
 
     return $variations;
 }
+
+
 sub FilterLines {
     my ($lines, $stable_ID, $parameters) = @_;
     
@@ -553,6 +565,7 @@ sub FilterLines {
     return $merged;
 }
 
+
 sub processVar {
     my $variants   = $_[0]; # List of all overlapping variants
     my $parameters = $_[1]; # All the submitted parameters to filter variants.
@@ -573,7 +586,7 @@ sub processVar {
         # Removing one variant at a time:
         my $variant = shift @total_vars;
 
-        # line: CHROM	POS	ID	REF	ALT	QUAL	FILTER	INFO	FORMAT	EGAN00001033155
+        # line: CHROMPOSIDREFALTQUALFILTERINFOFORMATEGAN00001033155
         my ($chr, $pos, $id, $a1, $a2, $qual, $filter, $info, $format, @genotypes) = split(/\t/, $variant);
 
         # Generating variant name (Sometimes the long allele names cause problems):
@@ -677,6 +690,156 @@ sub processVar {
 
     printf  ( "[Info] Number of filtered variants: %s\n", scalar(keys %hash));
     return (\%hash, \%genotypeContainer);
+}
+
+
+sub processVarV2 {
+    my $variants   = $_[0]; # List of all overlapping variants
+    my $parameters = $_[1]; # All the submitted parameters to filter variants.
+
+    my %hash = (); # SNP info container.
+    my %genotypeContainer = (); # genotype information container.
+
+    my $build = "GRCh".$parameters->{"build"};
+
+    print "[Info] Filtering variants:\n" if $verbose;
+
+    my @total_vars = split("\n", $variants);
+
+    printf "[Info] Total number of overlapping variants: %s\n", scalar(@total_vars) if $verbose;
+    # Looping through all variants that satisfy the submitted criteria:
+    while (@total_vars){
+        # Removing one variant at a time:
+        my $variant = shift @total_vars;
+
+        # line: CHROM   POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT  EGAN00001033155
+        my ($chr, $pos, $id, $a1, $a2, $qual, $filter, $info, $format, @genotypes) = split(/\t/, $variant);
+
+        # Generating variant name (Sometimes the long allele names cause problems):
+        my $short_a1 = length $a1 > 5 ? substr($a1,0,4) : $a1;
+        my $short_a2 = length $a2 > 5 ? substr($a2,0,4) : $a2;
+
+        my $SNPID = sprintf("%s_%s_%s_%s", $chr, $pos, $short_a1, $short_a2);
+
+        my $ac = 0;
+        my $an = 0;
+        my $MAF = 0;
+        my $genotypeFlip = 0;
+
+        # we have to intiate these variables for the dosages
+        my @genotypes2 = @genotypes;
+        foreach my $gt (@genotypes2){
+            my $dosage = 0;
+	    # this is missing data as denoted by the .vcf file
+	    if( $gt eq "." ){
+		next;
+	    }
+            my @fields = (split(":", $gt))[1];
+            my @fields2 = split(",",(split(":", $gt))[1]);
+            # missing data is coded 0 0 0 in oxford files from http://www.shapeit.fr/pages/m02_formats/gensample.html
+            # which is transfered to .vcf file (tried it out)
+            if(!($fields2[0] eq "0" && $fields2[1] eq "0" && $fields2[2] eq "0" )) {
+                $dosage = $fields2[1]*1 + $fields2[2]*2;
+                $ac += $dosage;
+                $an += 2;
+            }
+        }
+        $MAF = $ac/$an;
+        if ( $MAF > 0.5 ){
+            print "[Info] MAF of $SNPID is $MAF is greater then 0.5, genotype dosage is flipped.\n";
+            $MAF = 1 - $MAF;
+            # This flag shows if the non-ref allele is the major:
+            $genotypeFlip = 1;
+        }
+
+        (my $consequence )= $info =~ /consequence=(.+?)(;|\b)/;
+        # If AN and AC values are not found we skip the variant:
+        next unless $an && $ac;
+
+        # We add NA if consequence was not found:
+        $consequence = "NA" unless $consequence;
+
+        # We don't consider multialleleic sites this time.
+        if ( $a2 =~ /,/){
+            print  "[Warning] $SNPID will be omitted because of multiallelic! ($a2).\n";
+            next;
+        }
+
+        print "\n\nWARNING: $variant\n\n" if $ac eq "NA";
+
+        # Calculating values for filtering:
+        my $missingness = (scalar(@genotypes)*2 - $an)/(scalar(@genotypes)*2);
+
+        my $MAC = $ac;
+        $MAC = $an - $ac if $MAC > $an / 2;
+
+        # Looking at the memory usage:
+        # print STDERR total_size(\%hash), "\n";
+
+        # We don't consider indels if weights are used:
+        if (( length($a2) > 1 or length($a1) > 1 ) && $parameters->{"score"} ne "NA"){
+            print  "[Warning] $SNPID will be omitted because indel! ($a1/$a2).\n";
+            next;
+        }
+            # Filter out variants because of high missingness:
+        if ( $missingness > $parameters->{"missingthreshold"} ){
+            print  "[Warning] $SNPID will be omitted because of high missingness ($missingness).\n";
+            next;
+        }
+        # Filter out variant because of high MAF (regardless of the applied weight):
+        if ( $MAF > $parameters->{'MAF'} ){
+            printf "[Warning] $SNPID will be omitted because of high MAF (%.3f, cutoff: %s).\n", $MAF, $parameters->{'MAF'};
+            next;
+        }
+        # Filter out variant because of high MAF:
+        if ( $ac < $parameters->{'MAC'} ){
+            printf "[Warning] $SNPID will be omitted because of low minor allele count ($ac, cutoff: %s).\n", $parameters->{'MAC'};
+            next;
+        }
+
+        # If loss of function variants are required, we skipp althose variants that are not LOf:
+        if ( $parameters->{"lof"} && ! exists $parameters->{"lof_cons"}->{$consequence} ) {
+            printf "[Warning] $SNPID will be omitted because of consequence is not lof (%s).\n", $consequence;
+            next;
+        }
+        # If loftee is enabled, only low and high-confidence loss-of-function variants will be selected:
+        if ( $parameters->{"loftee"} && $info =~ /LoF_conf\=-/ ) {
+            printf "[Warning] $SNPID will be omitted because it is not a high- or low-confidence loss of function variant.\n";
+            next;
+        }
+
+        # If lofteeHC is enabled, only high-confidence loss-of-function variants will be selected:
+        if ( $parameters->{"lofteeHC"} && $info !~ /LoF_conf\=HC/ ) {
+            printf "[Warning] $SNPID will be omitted because it is not a high- confidence loss of function variant.\n";
+            next;
+        }
+
+        # If loss of function variants are required, we skipp althose variants that are not LOf:
+
+        # If everything went fine, initializing variant by adding missingness to the hash:
+        $hash{$SNPID}{"missingness"} = $missingness;
+
+        # Storing variant data for all variants:
+        $hash{$SNPID}{"alleles"} = [$a1, $a2];
+        $hash{$SNPID}{$build} = [$chr, $pos - 1, $pos];
+        $hash{$SNPID}{"frequencies"} = [$ac, $an, $MAF];
+        $hash{$SNPID}{"consequence"} = $consequence;
+        $hash{$SNPID}{"rsID"} = $id;
+
+        # Parsing genotypes:
+        foreach my $gt (@genotypes){
+            my @fields = (split(":", $gt))[1];
+            my @fields2 = split(",",(split(":", $gt))[1]);
+            if(!($fields2[0] eq "0" && $fields2[1] eq "0" && $fields2[2] eq "0" )) {
+                push(@{$genotypeContainer{$SNPID}}, $genotypeFlip == 1 ? $fields2[1]*1 + $fields2[0]*2 : $fields2[1]*1 + $fields2[2]*2 );
+            } else {
+                push(@{$genotypeContainer{$SNPID}}, "-9");
+            }
+        }
+    }
+    printf  ( "[Info] Number of filtered variants: %s\n", scalar(keys %hash));
+    return (\%hash, \%genotypeContainer);
+
 }
 
 sub print_SNPlist {
