@@ -79,6 +79,7 @@ It pools results together within one chunk."
     echo "     -o  - exclude all non loss-of-function variants from the test (less than missense in severity)."
     echo "     -f  - include only HC and LC loftee variants."
     echo "     -j  - include only HC loftee variants."
+    echo "     -B  - which build your genotype data is on - only 37 or 38 alloewd."
     echo ""
     echo "Parameters to set up scores for variants:"
     echo "     -s  - turn weights on. Arguments: CADD, Eigen, EigenPC, EigenPhred, EigenPCPhred,"
@@ -100,7 +101,7 @@ It pools results together within one chunk."
     echo "     -p  - phenotype (required, no default)"
     echo "     -P  - phenotype file (required, no default)"
     echo "     -K  - Kinship file (required, no default)"
-    echo "     -V  - VCF file (required, no default, Use * character for chromosome name eg 'chr*.vcf.gz')"
+    echo "     -V  - VCF file (required, no default, Use * character for chromosome name eg 'chr*.vcf.gz') - if has GT:GP, dosages are used"
     echo ""
     echo "Other options:"
     echo "     -h  - print help message and exit"
@@ -158,7 +159,7 @@ if [ $# == 0 ]; then display_help; fi
 
 # Looping through all command line options:
 OPTIND=1
-while getopts ":hL:c:d:p:P:K:V:bi:g:m:s:l:e:x:k:t:ofw:j" optname; do
+while getopts ":hL:c:d:p:P:K:V:D:bi:g:m:s:l:e:x:k:t:ofw:j:B" optname; do
     case "$optname" in
       # Gene list related parameters:
         "L") geneListFile=${OPTARG} ;;
@@ -187,6 +188,7 @@ while getopts ":hL:c:d:p:P:K:V:bi:g:m:s:l:e:x:k:t:ofw:j" optname; do
         "o") lof=1 ;;
         "f") loftee=1 ;;
         "j") lofteeHC=1 ;;
+        "B") build=${OPTARG} ;;
 
       # Other parameters:
         "w") rootDir=${OPTARG} ;;
@@ -363,6 +365,7 @@ echo -e "\tScript dir: ${scriptDir}"
 echo -e "\tSignificance threshold: ${signifThreshold}"
 echo -e "\tWorking directory: ${workingDir}/gene_set.${chunkNo}"
 echo -e "\tKeeping temporary files: ${keep_temp}"
+echo -e "\tSelected genomic build: ${build}"
 echo ""
 
 echo "[Info] Gene list options:"
@@ -415,8 +418,8 @@ awk -v cn="${chunkNo}" -v cs="${chunkSize}" 'NR > (cn-1)*cs && NR <= cn*cs' ${ge
 cd ${workingDir}/gene_set.${chunkNo};
 
 # Reporting call:
-echo "${scriptDir}/${regionSelector}  --build 38 --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log"
-${scriptDir}/${regionSelector}  --build 38 --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log
+echo "${scriptDir}/${regionSelector}  --build $build --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log"
+${scriptDir}/${regionSelector}  --build $build --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log
 
 # We are expecting to get 2 files: gene_set_output_genotype_file.txt & gene_set_output_SNPinfo_file.txt
 echo "[Info] Checking output..."
