@@ -40,7 +40,7 @@ last_modified=2018.03.09
 
 ## Built in versions:
 GENCODE_release=25
-Ensembl_release=91
+Ensembl_release=84
 
 # Get script dir:
 scriptDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -50,7 +50,7 @@ liftOver=/nfs/users/nfs_d/ds26/bin/liftOver
 ## printing out information if no parameter is provided:
 function usage {
     echo ""
-    echo "Usage: $0 -G <GTEx file> -t <targetdir> -b <build> -E <EnsembleFiles>"
+    echo "Usage: $0 -G <GTEx file> -t <targetdir> -b <build>"
     echo ""
     echo " This script was written to prepare input file for the burden testing pipeline."
     echo ""
@@ -60,7 +60,7 @@ function usage {
     echo "Requirements:"
     echo "  bgzip, tabix in path"
     echo "  liftOver in path"
-    echo "  hg19ToHg38.over.chain chain file in script dir"
+    echo "  hg19ToHg38.over.chain AND hg38ToHg19.over.chain chain file in script dir"
     echo "  bedtools in path"
     echo "  downloaded GTEx datafile with the single eQTLs (eg. GTEx_Analysis_V6_eQTLs.tar.gz)"
     echo ""
@@ -147,12 +147,11 @@ if [[ $# == 0 ]]; then usage; fi
 
 # Processing command line options:
 OPTIND=1
-while getopts "G:t:b:E:h" optname; do
+while getopts "G:t:b:h" optname; do
     case "$optname" in
         "G" ) GTExFile="${OPTARG}" ;;
         "t" ) targetDir="${OPTARG}" ;;
 	"b" ) build="${OPTARG}" ;;
-	"E" ) EnsembleFiles="${OPTARG}" ;;
         "h" ) usage ;;
         "?" ) usage ;;
         *) usage ;;
@@ -195,6 +194,7 @@ checkCommand bedtools
 
 # Checking chainfile in the scriptDir:
 testFile ${scriptDir}/hg19ToHg38.over.chain
+testFile ${scriptDir}/hg38ToHg19.over.chain
 
 # Last step in setup:
 today=$(date "+%Y.%m.%d")
@@ -223,37 +223,36 @@ genes=$(zcat ${targetDir}/${today}/GENCODE/gencode.v${GENCODE_release}.annotatio
 
 info "Total number of genes in the GENCODE file: ${genes}\n\n"
 
-#############################################################################################
-## EnsemblRegulation is on GRCh38 has to be lifted to GRCh37 - via CrossMap - release 91
-#########################################################################################
 
 # prepare target directory:
 mkdir -p ${targetDir}/${today}/EnsemblRegulation
 info "Downloading cell specific regulatory features from Ensembl.\n"
 
-# this one works for Ensemble release 91 - that looks different from 84
-if [[ $build == "37" ]] && [[ -z "${EnsembleFiles}" ]]; then
-    echo "You have to provide the Ensemble Regulation files lifted to GRCh37"
-    echo "The GRCh38 for release 91 can be dowloaded using this command:"
-    echo "wget -P  ${targetDir}/${today}/EnsemblRegulation -r -np -nH --cut-dirs=6 -R CHECKSUMS ftp://ftp.ensembl.org/pub/release-91/regulation/homo_sapiens/RegulatoryFeatureActivity/"
-    echo "This can be done using CrossMap and their chain files or their online converter."
-    echo "The files should be named the same way as the original GRCh38 files, however replacing 'GRCh38' with 'GRCh37'"
-    echo ""
-    exit 1
-elif [ $build == "38" ]; then
-    wget -P  ${targetDir}/${today}/EnsemblRegulation -r -np -nH --cut-dirs=6 -R CHECKSUMS ftp://ftp.ensembl.org/pub/release-91/regulation/homo_sapiens/RegulatoryFeatureActivity/
-else
-    # if GRCh37 EnsemblRegulation files present copy them
-    cp $EnsembleFiles/* ${targetDir}/${today}/EnsemblRegulation/
-fi
+# Get list of all cell types:
+cells=$(curl -s ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/ \
+          | grep gff.gz \
+          | perl -lane 'print $F[-1]')
 
-# If there are no files in the downloaded set, it means there were some problems. We are exiting.
-if [ `ls ${targetDir}/${today}/EnsemblRegulation/*.gff.gz | wc -l` == "0" ]; then
-    echo "[Error] No files were found in the Ensembl regulation folder."
+# If there are no cell types present in the downloaded set, it means there were some problems. We are exiting.
+if [ -z "${cells}" ]; then
+    echo "[Error] No cell types were found in the Ensembl regulation folder."
     echo "[Error] URL: ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/regulatory_features/"
     echo "Exiting."
     exit 1
 fi
+
+# Download all cell types:
+for cell in ${cells}; do
+    echo -n "."
+    # Download all cell type:
+    wget -q ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/${cell} \
+        -O ${targetDir}/${today}/EnsemblRegulation/${cell}
+
+    # Testing if the file is exists or not:
+    testFile "${targetDir}/${today}/EnsemblRegulation/${cell}"
+
+done
+echo "Done."
 
 
 ## Get list of all cell types:
@@ -370,25 +369,22 @@ info "Number of Appris annotated GENCODE annotations: ${appris_lines}\n\n"
 ## Step 7. Pre-processing cell specific regulatory data
 ##
 
-echo "" > /nfs/users/nfs_e/ej6/tmp.list
+#echo "" > ${targetDir}/${today}/processed/cell.list
 
 info "Aggregate cell specific information of regulatory features... "
-#CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /RegulatoryFeatures_(.+).gff.gz/ ' )
-# Adopted to new naming system from Ensembl for release 91
-CellTypes=$( find ${targetDir}/${today}/EnsemblRegulation/ | grep gff.gz$ | xargs -I % bash -c 'basename % | sed "s/homo_sapiens.GRCh...//g" | sed "s/.Regulatory_Build.regulatory_activity.20161111.gff.gz//g"' | egrep -v "HSMMtube|NHDF_AD" )
-
+CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /RegulatoryFeatures_(.+).gff.gz/ ' )
 for cell in ${CellTypes}; do
+    #echo $cell >> ${targetDir}/${today}/processed/cell.list
     export cell
-    `echo $cell >> /nfs/users/nfs_e/ej6/tmp.list`
     # parsing cell specific files (At this point we only consider active features. Although repressed regions might also be informative.):
-    zcat ${targetDir}/${today}/EnsemblRegulation/homo_sapiens.GRCh${build}.${cell}.Regulatory_Build.regulatory_activity.20161111.gff.gz | grep -i "=active" \
+    zcat ${targetDir}/${today}/EnsemblRegulation/RegulatoryFeatures_${cell}.gff.gz | grep -i "=active" \
         | perl -F"\t" -lane '$F[0] =~ s/^chr//;
                 next unless length($F[0]) < 3; # We skip irregular chromosome names.
                 $cell_type = $ENV{cell};
                 $start = $F[3];
                 $type = $F[2];
                 $end = $F[4];
-                ($ID) = $_ =~ /regulatory_feature_stable_id=(ENSR\d+)/;
+                ($ID) = $_ =~ /ID=(ENSR\d+)/;
                 ($bstart) = $F[8] =~ /bound_start=(.+?);/;
                 ($bend) = $F[8] =~ /bound_end=(.+?);/;
                 print join "\t", $cell_type, $F[0], $start, $end, $ID, $type, $bstart, $bend;'
@@ -405,10 +401,24 @@ done | perl -F"\t" -lane '
                 $h{$ID}{line}[1], $h{$ID}{line}[2], $h{$ID}{line}[4], $h{$ID}{line}[3], $cells
         }
     }
-' | sort -k1,1 -k2,2n  | bgzip -f > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz
+' | sort -k1,1 -k2,2n  > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed
 
-echo `zcat ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz | wc -l`
-echo `zcat ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz | head`
+
+if [ $build == "37" ]; then
+    info "Running liftOver for Ensemble to build 37 (~2 minutes).... "
+    $liftOver ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed ${scriptDir}/hg38ToHg19.over.chain \
+	${targetDir}/${today}/processed/Cell_spec_regulatory_features_GRCh37.bed \
+	${targetDir}/${today}/processed/Cell_spec_regulatory_features_failed_to_map.bed
+    cat ${targetDir}/${today}/processed/Cell_spec_regulatory_features_GRCh37.bed | sort -k1,1 -k2,2n > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed
+    failedMap=$(wc -l ${targetDir}/${today}/processed/Cell_spec_regulatory_features_failed_to_map.bed | awk '{print $1}')
+    Mapped=$(wc -l ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed | awk '{print $1}')
+
+    info "Successfully lifted Ensebmle variants: ${Mapped}, failed variants: ${failedMap}.\n\n"
+    echo "Done."    
+fi
+
+bgzip -f ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz
+
 # Test if output is empty or not:
 testFileLines ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz
 
@@ -418,7 +428,6 @@ echo  "Done."
 # Print out report:
 cellSpecFeatLines=$(zcat ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz | wc -l | awk '{print $1}')
 info "Number of cell specific regulatory features: $cellSpecFeatLines\n\n"
-
 
 ##
 ## Step 8. Adding GRCh38 coordinates to GTEx data. (based on rsID)
@@ -467,7 +476,7 @@ if [ $build == "38" ]; then
     $liftOver ${targetDir}/${today}/processed/GTEx_temp.bed ${scriptDir}/hg19ToHg38.over.chain \
 	${targetDir}/${today}/processed/GTEx_temp_GRCh38tmp.bed \
 	${targetDir}/${today}/processed/GTEx_temp_failed_to_map.bed
-    mv ${targetDir}/${today}/processed/GTEx_temp_GRCh38tmp.bed ${targetDir}/${today}/processed/GTEx_temp.bed
+    cp ${targetDir}/${today}/processed/GTEx_temp_GRCh38tmp.bed ${targetDir}/${today}/processed/GTEx_temp.bed
     echo "Done."
 fi
 
