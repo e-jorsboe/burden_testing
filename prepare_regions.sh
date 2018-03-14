@@ -39,11 +39,13 @@ last_modified=2018.03.09
 ## This script has been updated to the most recent GENCODE_release (27) and Ensembl_release (91)
 
 ## Built in versions:
-GENCODE_release=27
+GENCODE_release=25
 Ensembl_release=91
 
 # Get script dir:
 scriptDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+liftOver=/nfs/users/nfs_d/ds26/bin/liftOver
 
 ## printing out information if no parameter is provided:
 function usage {
@@ -145,11 +147,11 @@ if [[ $# == 0 ]]; then usage; fi
 
 # Processing command line options:
 OPTIND=1
-while getopts "G:t:h" optname; do
+while getopts "G:t:b:E:h" optname; do
     case "$optname" in
         "G" ) GTExFile="${OPTARG}" ;;
         "t" ) targetDir="${OPTARG}" ;;
-	"B" ) build="${OPTARG}" ;;
+	"b" ) build="${OPTARG}" ;;
 	"E" ) EnsembleFiles="${OPTARG}" ;;
         "h" ) usage ;;
         "?" ) usage ;;
@@ -188,7 +190,7 @@ fi
 
 # Checking required commands:
 checkCommand tabix
-checkCommand liftOver
+checkCommand $liftOver
 checkCommand bedtools
 
 # Checking chainfile in the scriptDir:
@@ -230,7 +232,7 @@ mkdir -p ${targetDir}/${today}/EnsemblRegulation
 info "Downloading cell specific regulatory features from Ensembl.\n"
 
 # this one works for Ensemble release 91 - that looks different from 84
-if [ $build == "37" ] && [ ! -z "${EnsembleFiles}" ]; then
+if [[ $build == "37" ]] && [[ -z "${EnsembleFiles}" ]]; then
     echo "You have to provide the Ensemble Regulation files lifted to GRCh37"
     echo "The GRCh38 for release 91 can be dowloaded using this command:"
     echo "wget -P  ${targetDir}/${today}/EnsemblRegulation -r -np -nH --cut-dirs=6 -R CHECKSUMS ftp://ftp.ensembl.org/pub/release-91/regulation/homo_sapiens/RegulatoryFeatureActivity/"
@@ -291,7 +293,7 @@ mkdir -p ${targetDir}/${today}/APPRIS
 info "Downloading APPRIS isoform data.\n"
 info "Download from the current release folder. Build: GRCh${build}, for GENCODE version: ${GENCODE_release}\n"
 
-wget - http://apprisws.bioinfo.cnio.es/pub/current_release/datafiles/homo_sapiens/GRCh${build}/appris_data.principal.txt \
+wget -q http://apprisws.bioinfo.cnio.es/pub/current_release/datafiles/homo_sapiens/GRCh${build}/appris_data.principal.txt \
     -O ${targetDir}/${today}/APPRIS/appris_data.principal.txt
 
 
@@ -368,13 +370,16 @@ info "Number of Appris annotated GENCODE annotations: ${appris_lines}\n\n"
 ## Step 7. Pre-processing cell specific regulatory data
 ##
 
+echo "" > /nfs/users/nfs_e/ej6/tmp.list
 
 info "Aggregate cell specific information of regulatory features... "
 #CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /RegulatoryFeatures_(.+).gff.gz/ ' )
 # Adopted to new naming system from Ensembl for release 91
-CellTypes=$( find ${targetDir}/${today}/EnsemblRegulation/ | grep gff.gz$ | xargs -I % bash -c 'basename % | sed "s/homo_sapiens.GRCh...//g" | sed "s/.Regulatory_Build.regulatory_activity.20161111.gff.gz//g"' )
+CellTypes=$( find ${targetDir}/${today}/EnsemblRegulation/ | grep gff.gz$ | xargs -I % bash -c 'basename % | sed "s/homo_sapiens.GRCh...//g" | sed "s/.Regulatory_Build.regulatory_activity.20161111.gff.gz//g"' | egrep -v "HSMMtube|NHDF_AD" )
+
 for cell in ${CellTypes}; do
     export cell
+    `echo $cell >> /nfs/users/nfs_e/ej6/tmp.list`
     # parsing cell specific files (At this point we only consider active features. Although repressed regions might also be informative.):
     zcat ${targetDir}/${today}/EnsemblRegulation/homo_sapiens.GRCh${build}.${cell}.Regulatory_Build.regulatory_activity.20161111.gff.gz | grep -i "=active" \
         | perl -F"\t" -lane '$F[0] =~ s/^chr//;
@@ -383,7 +388,7 @@ for cell in ${CellTypes}; do
                 $start = $F[3];
                 $type = $F[2];
                 $end = $F[4];
-                ($ID) = $_ =~ /ID=(ENSR\d+)/;
+                ($ID) = $_ =~ /regulatory_feature_stable_id=(ENSR\d+)/;
                 ($bstart) = $F[8] =~ /bound_start=(.+?);/;
                 ($bend) = $F[8] =~ /bound_end=(.+?);/;
                 print join "\t", $cell_type, $F[0], $start, $end, $ID, $type, $bstart, $bend;'
@@ -400,8 +405,10 @@ done | perl -F"\t" -lane '
                 $h{$ID}{line}[1], $h{$ID}{line}[2], $h{$ID}{line}[4], $h{$ID}{line}[3], $cells
         }
     }
-' | sort -k1,1 -k2,2n | bgzip -f > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz
+' | sort -k1,1 -k2,2n  | bgzip -f > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz
 
+echo `zcat ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz | wc -l`
+echo `zcat ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz | head`
 # Test if output is empty or not:
 testFileLines ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz
 
@@ -451,13 +458,13 @@ zcat ${GTExFile}  | perl -F"\t" -lane '
     '  | sort -k1,1 -k2,2n > ${targetDir}/${today}/processed/GTEx_temp.bed
 
 # Testing if output file has lines:
-testFileLines ${targetDir}/${today}/${targetDir}/${today}/processed/GTEx_temp.bed
+testFileLines ${targetDir}/${today}/processed/GTEx_temp.bed
 
 echo "Done."
 
 if [ $build == "38" ]; then
     info "Running liftOver (~2 minutes).... "
-    liftOver ${targetDir}/${today}/processed/GTEx_temp.bed ${scriptDir}/hg19ToHg38.over.chain \
+    $liftOver ${targetDir}/${today}/processed/GTEx_temp.bed ${scriptDir}/hg19ToHg38.over.chain \
 	${targetDir}/${today}/processed/GTEx_temp_GRCh38tmp.bed \
 	${targetDir}/${today}/processed/GTEx_temp_failed_to_map.bed
     mv ${targetDir}/${today}/processed/GTEx_temp_GRCh38tmp.bed ${targetDir}/${today}/processed/GTEx_temp.bed
@@ -542,7 +549,7 @@ zcat ${targetDir}/${today}/GENCODE/gencode.v${GENCODE_release}.annotation.gtf.gz
     ' | sort -k1,1 -k2,2n | bgzip -f > ${targetDir}/${today}/processed/genes.bed.gz
 
 # Intersect bed run.
-# chr1	16048	29570	ID:ENSG00000227232.5;Name:WASH7P	chr1	16048	30847	ENSR00000528774	chr=1;start=16048;end=30847;class=CTCF_binding_site;regulatory_ID=ENSR00000528774;Tissues=DND-41|HMEC|HSMMtube|IMR90|K562|MultiCell|NHDF-AD
+# chr11604829570ID:ENSG00000227232.5;Name:WASH7Pchr11604830847ENSR00000528774chr=1;start=16048;end=30847;class=CTCF_binding_site;regulatory_ID=ENSR00000528774;Tissues=DND-41|HMEC|HSMMtube|IMR90|K562|MultiCell|NHDF-AD
 intersectBed -wb -a ${targetDir}/${today}/processed/genes.bed.gz -b ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed.gz -sorted \
     | perl -MData::Dumper -MJSON -F"\t" -lane '
         # Parsing gene info:
