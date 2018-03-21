@@ -731,7 +731,7 @@ sub processVarV2 {
         foreach my $gt (@genotypes2){
             my $dosage = 0;
 	    # this is missing data as denoted by the .vcf file
-	    if( $gt eq "." ){
+	    if( $gt eq "." || $gt eq "./.:." ){
 		next;
 	    }
             my @fields = (split(":", $gt))[1];
