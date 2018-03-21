@@ -13,7 +13,7 @@
 # Todo for the next generation of the wrapper:
 ## An older verision of MONSTER had an issue why we had to wrap genes individually for
 
-version="v11 Last modified: 2017.08.01" # This version mainly changes in the documentation.
+version="v11 Last modified: 2018.03.21" # This version mainly changes in the documentation.
 
 today=$(date "+%Y.%m.%d") # Get the date
 
@@ -27,7 +27,7 @@ export scriptDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # phenotypeDir=/lustre/scratch115/projects/t144_helic_15x/analysis/HA/phenotypes
 # phenotypeDir=/lustre/scratch115/projects/t144_helic_15x/analysis/HA/phenotypes/correct_names.andmissing
 
-# Default f4ile with all the gene names (only on autosomes):
+# Default file with all the gene names (only on autosomes):
 geneListFile="${scriptDir}/gene_list.lst"
 
 # Kinship matrix file: # No longer hardwired, accepted as command line parameter.
@@ -102,6 +102,7 @@ It pools results together within one chunk."
     echo "     -P  - phenotype file (required, no default)"
     echo "     -K  - Kinship file (required, no default)"
     echo "     -V  - VCF file (required, no default, Use * character for chromosome name eg 'chr*.vcf.gz') - if has GT:GP, dosages are used"
+    echo "     -C  - Covar file for adjusting with covariates - should look like phenotype file replacing phenotype values with covariate values"
     echo ""
     echo "Other options:"
     echo "     -h  - print help message and exit"
@@ -159,7 +160,7 @@ if [ $# == 0 ]; then display_help; fi
 
 # Looping through all command line options:
 OPTIND=1
-while getopts ":hL:c:d:p:P:K:V:D:bi:g:m:s:l:e:x:k:t:ofw:j:B" optname; do
+while getopts ":hL:c:d:p:P:K:V:D:C:bi:g:m:s:l:e:x:k:t:ofw:j:B" optname; do
     case "$optname" in
       # Gene list related parameters:
         "L") geneListFile=${OPTARG} ;;
@@ -171,6 +172,7 @@ while getopts ":hL:c:d:p:P:K:V:D:bi:g:m:s:l:e:x:k:t:ofw:j:B" optname; do
         "P" ) phenotypeFile=${OPTARG} ;;
         "K" ) kinshipFile=${OPTARG} ;;
         "V" ) vcfFile="${OPTARG}" ;;
+	"C" ) covarFile=${OPTARG} ;;
 
       # Wrapper option:
         "b") keep_temp="yes";;
@@ -226,6 +228,15 @@ elif [[ ! -e $( echo "${vcfFile}" | sed -e 's/\%/12/') ]]; then
 else
     commandOptions=" --vcfFile ${vcfFile} "
 fi
+
+# Gene list file (Is it set? Does it exists?):
+if [[ -z "${covarFile}" ]]; then
+    if [[ ! -e "${covarFile}" ]]; then
+	echo "[Error] Covar file could not be opened: $covarFile";
+	exit;
+    fi
+fi
+
 
 # Select genome build:
 #commandOptions="${commandOptions} --build ${build}"
@@ -480,8 +491,26 @@ fi
 # So Monster can process it:
 
 # Get the phenotype:
-echo "[Info] Extracting phenotype."
-cat ${phenotypeFile} | grep -v NA | awk 'NR != 1 {printf "1\t%s\t0\t0\t0\t%s\n", $1, $3}' > pheno.txt
+if [ -z $covarFile ]; then
+    DIFF=$(diff <(cat $covarFile | tr ' ' '\t' | cut -f1) <(cat $phenotypeFile | tr ' ' '\t' | cut -f1)) 
+    if [ "$DIFF" != "" ]; then
+	echo "The pheno file and covar file do not identical ID columns"
+	exit 
+    else
+	N1=`cat ${phenotypeFile} | tr ' ' '\t' | grep -wv NA | awk 'NR != 1 {printf "1\t%s\t0\t0\t0\t%s\n", $1, $3}' | wc -l`
+	N2=`cat ${covarFile} | tr ' ' '\t' | cut -f2- | tail -n +2 | grep -wv NA | wc -l`
+	if [ $N1 != $N2 ]; then
+	    echo "The pheno file and covar file have different number of rows with not NA values"
+	    echo "Pheno file has $N1 and covar file has $N2"
+            exit
+	fi
+	echo "[Info] Extracting phenotype and covariates."
+	paste -d"\t" <(cat ${phenotypeFile} | tr ' ' '\t' | grep -wv NA | awk 'NR != 1 {printf "1\t%s\t0\t0\t0\t%s\n", $1, $3}') <(cat $covarFile | tr ' ' '\t' | cut -f2- | tail -n +2 | grep -wv NA) > pheno.txt
+    fi
+else
+    echo "[Info] Extracting phenotype."
+    cat ${phenotypeFile} | tr ' ' '\t' | grep -wv NA | awk 'NR != 1 {printf "1\t%s\t0\t0\t0\t%s\n", $1, $3}' > pheno.txt
+fi
 
 # Order the sample IDs in the phenotype file:
 echo "[Info] Re-ordering samples in the phenotype file."
