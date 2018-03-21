@@ -40,7 +40,7 @@ last_modified=2018.03.09
 
 ## Built in versions:
 GENCODE_release=25
-Ensembl_release=84
+Ensembl_release=86
 
 # Get script dir:
 scriptDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
@@ -228,15 +228,25 @@ info "Total number of genes in the GENCODE file: ${genes}\n\n"
 mkdir -p ${targetDir}/${today}/EnsemblRegulation
 info "Downloading cell specific regulatory features from Ensembl.\n"
 
-# Get list of all cell types:
-cells=$(curl -s ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/ \
-          | grep gff.gz \
-          | perl -lane 'print $F[-1]')
+if [ $Ensembl_release == "84" ]; then
+    # Get list of all cell types:
+    cells=$(curl -s ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/ \
+        | grep gff.gz \
+        | perl -lane 'print $F[-1]')
+else
+    cells=$(curl -s ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/regulatory_features/ \
+        | egrep -v "AnnotatedFeatures.gff.gz|MotifFeatures.gff.gz|RegulatoryFeatures.gff.gz" | grep gff.gz \
+        | perl -lane 'print $F[-1]')
+fi
 
 # If there are no cell types present in the downloaded set, it means there were some problems. We are exiting.
 if [ -z "${cells}" ]; then
     echo "[Error] No cell types were found in the Ensembl regulation folder."
-    echo "[Error] URL: ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/regulatory_features/"
+    if [ $Ensembl_release == "84" ]; then
+	echo "[Error] URL: ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/"
+    else
+	echo "[Error] URL: ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/regulatory_features/"
+    fi
     echo "Exiting."
     exit 1
 fi
@@ -245,9 +255,13 @@ fi
 for cell in ${cells}; do
     echo -n "."
     # Download all cell type:
-    wget -q ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/${cell} \
-        -O ${targetDir}/${today}/EnsemblRegulation/${cell}
-
+    if [ $Ensembl_release == "84" ]; then
+	wget -q ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/${cell} \
+            -O ${targetDir}/${today}/EnsemblRegulation/${cell}
+    else
+	wget -q ftp://ftp.ensembl.org/pub/release-${Ensembl_release}/regulation/homo_sapiens/regulatory_features/${cell} \
+            -O ${targetDir}/${today}/EnsemblRegulation/${cell}
+    fi
     # Testing if the file is exists or not:
     testFile "${targetDir}/${today}/EnsemblRegulation/${cell}"
 
@@ -371,25 +385,27 @@ info "Number of Appris annotated GENCODE annotations: ${appris_lines}\n\n"
 
 #echo "" > ${targetDir}/${today}/processed/cell.list
 
-info "Aggregate cell specific information of regulatory features... "
-CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /RegulatoryFeatures_(.+).gff.gz/ ' )
-for cell in ${CellTypes}; do
+if [ $Ensembl_release == "84" ]; then
+
+    info "Aggregate cell specific information of regulatory features... "
+    CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /RegulatoryFeatures_(.+).gff.gz/ ' )
+    for cell in ${CellTypes}; do
     #echo $cell >> ${targetDir}/${today}/processed/cell.list
-    export cell
+	export cell
     # parsing cell specific files (At this point we only consider active features. Although repressed regions might also be informative.):
-    zcat ${targetDir}/${today}/EnsemblRegulation/RegulatoryFeatures_${cell}.gff.gz | grep -i "=active" \
-        | perl -F"\t" -lane '$F[0] =~ s/^chr//;
+	zcat ${targetDir}/${today}/EnsemblRegulation/RegulatoryFeatures_${cell}.gff.gz | grep -i "=active" \
+            | perl -F"\t" -lane '$F[0] =~ s/^chr//;
                 next unless length($F[0]) < 3; # We skip irregular chromosome names.
                 $cell_type = $ENV{cell};
                 $start = $F[3];
                 $type = $F[2];
                 $end = $F[4];
-                ($ID) = $_ =~ /ID=(ENSR\d+)/;
+                ($ID) = $_ =~ /ID=(ENSR\d+)/;               
                 ($bstart) = $F[8] =~ /bound_start=(.+?);/;
                 ($bend) = $F[8] =~ /bound_end=(.+?);/;
                 print join "\t", $cell_type, $F[0], $start, $end, $ID, $type, $bstart, $bend;'
 # Now combining these lines in a fashion that each line will contain all active tissues:
-done | perl -F"\t" -lane '
+    done | perl -F"\t" -lane '
     $x =shift @F;
     $h{$F[3]}{line} = [@F];
     push(@{$h{$F[3]}{cells}}, $x);
@@ -402,7 +418,42 @@ done | perl -F"\t" -lane '
         }
     }
 ' | sort -k1,1 -k2,2n  > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed
-
+    
+else
+    
+    info "Aggregate cell specific information of regulatory features... "
+    CellTypes=$( ls -la ${targetDir}/${today}/EnsemblRegulation/ | perl -lane 'print $1 if  $F[-1] =~ /(.+).gff.gz/ ' )
+    for cell in ${CellTypes}; do
+	export cell
+        # parsing cell specific files (At this point we only consider active features. Although repressed regions might also be informative.):
+	zcat ${targetDir}/${today}/EnsemblRegulation/${cell}.gff.gz | grep -i "=active" \
+            | perl -F"\t" -lane '$F[0] =~ s/^chr//;
+                next unless length($F[0]) < 3; # We skip irregular chromosome names.
+                $cell_type = $ENV{cell};
+                $start = $F[3];
+                $type = $F[2];
+                $end = $F[4];
+                ($ID) = $_ =~ /regulatory_feature_stable_id=(ENSR\d+)/;                
+                ($bstart) = $F[8] =~ /bound_start=(.+?);/;
+                ($bend) = $F[8] =~ /bound_end=(.+?);/;
+                print join "\t", $cell_type, $F[0], $start, $end, $ID, $type, $bstart, $bend;'
+# Now combining these lines in a fashion that each line will contain all active tissues:
+    done | perl -F"\t" -lane '
+    $x =shift @F;
+    $h{$F[3]}{line} = [@F];
+    push(@{$h{$F[3]}{cells}}, $x);
+    END {
+        foreach $ID (keys %h){
+            $cells = join "|", @{$h{$ID}{cells}};
+            printf "chr%s\t%s\t%s\t%s\tchr=%s;start=%s;end=%s;class=%s;regulatory_ID=%s;Tissues=%s\n",
+                $h{$ID}{line}[0], $h{$ID}{line}[1], $h{$ID}{line}[2], $h{$ID}{line}[3], $h{$ID}{line}[0],
+                $h{$ID}{line}[1], $h{$ID}{line}[2], $h{$ID}{line}[4], $h{$ID}{line}[3], $cells
+        }
+    }
+' | sort -k1,1 -k2,2n  > ${targetDir}/${today}/processed/Cell_spec_regulatory_features.bed
+    
+    
+fi
 
 if [ $build == "37" ]; then
     info "Running liftOver for Ensemble to build 37 (~2 minutes).... "
