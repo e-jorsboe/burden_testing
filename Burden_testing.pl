@@ -66,7 +66,7 @@ my ($inputFile, $outputFile, $help);
 GetOptions(
     # Which build are we using?
     'build=s' => \$parameters->{"build"},
-    
+    'ifDosages=s'=> \$parameters->{"ifDosages"},
     # Input/Output:
     'input=s' => \$inputFile,
     'output=s' => \$outputFile,
@@ -162,8 +162,10 @@ while ( my $ID = <$INPUT> ){
     
     # If the input is not a region a few extra steps will be taken:
     unless ($ID =~ /chr(\d+)_(\d+)-(\d+)/i){
-        ($chr, $start, $end, $stable_ID, $name) = $GENCODE_data->GetCoordinates($ID);
-    
+        #($chr, $start, $end, $stable_ID, $name) = $GENCODE_data->GetCoordinates($ID);
+        # SWAPPED AROUND stable_ID and name! - By Emil 22-03-2018
+	($chr, $start, $end, $name, $stable_ID) = $GENCODE_data->GetCoordinates($ID);
+
         # Skipping genes that were not found in the GENCODE dataset.
         if ($start eq "NA") {
             print "[Warning] Gene $ID was not found in the GENCODE data. Is it a valid gene name? This gene will be skipped! [NO_GENE]\n";
@@ -196,12 +198,16 @@ while ( my $ID = <$INPUT> ){
     # Have to check if it is genotype probs being used
     my @myvars = split("\n", $variants);
 
+    my $hash;
+    my $genotypes;
     # Filtering variants based on the provided parameters:
-    if ((split(/\t/, $variant)[8]) eq "GT:GR" || (split(/\t/, $variant)[8]) eq "GR") {
+    # if (((split("\t", $variants)[8]) eq "GT:GR") || ((split("\t", $variants)[8]) eq "GR")) {
+
+    if ( $parameters->{"ifDosages"} > 0 ) {
 	# calling processVar for genotype probabilities
-	my ($hash, $genotypes) = &processVarV2($variants, $parameters);
+        ($hash, $genotypes) = &processVarV2($variants, $parameters);
     } else{
-	my ($hash, $genotypes) = &processVar($variants, $parameters);
+	($hash, $genotypes) = &processVar($variants, $parameters);
     }
 
     # printf STDERR "%s\t%s\t%s\n", $gene_count, total_size($hash)/1024, total_size($AddScore)/1024; # Debug line.
@@ -483,11 +489,12 @@ sub FilterLines {
     
     my @output_lines = ();
     my %hash = ();
-    
+
     # The following hashes read from the parameter set:
     my %GENCODE = exists $parameters->{"GENCODE"} ? %{$parameters->{"GENCODE"}} : ();
     my %GTEx = exists $parameters->{"GTEx"} ? %{$parameters->{"GTEx"}} : ();
     my %overlap = exists $parameters->{"overlap"} ? %{$parameters->{"overlap"}} : ();
+
 
     foreach my $line (split (/\n/, $lines)){
 
@@ -500,7 +507,6 @@ sub FilterLines {
         my $source = $annot_hash{"source"};
         my $class =  exists $annot_hash{"class"} ? $annot_hash{"class"} :  "?";
         # print "\n$source $class";
-
         if ($source eq "GENCODE" and exists $GENCODE{$class}) {
 
             # If the user has specified, minor transcripts will be excluded:
