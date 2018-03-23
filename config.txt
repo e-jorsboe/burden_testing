@@ -1,7 +1,7 @@
 ##
 ## This file contains all source files used by burden_get_regions_v2.1pl script
 ##
-## Last modified: 2017.08.03 - updated region file.
+## Last modified: 2018.03.21 - updated Linked_features file.
 ##
 ## Format:
 #### 1. Start comment lines with #
@@ -14,7 +14,7 @@
 ##
 
 ## This file contains coordinates of the gene related genomic features and annotation:
-Linked_features=/lustre/scratch113/projects/helic/ds26/project_burden/2016.10.10/Linked_features.bed.gz
+Linked_features=/lustre/scratch115/realdata/mdt2/projects/t144_silc_grland/ej6/MONSTERgreenland/testRun/2018.03.19/Linked_features.bed.gz
 
 ## To get CADD/Eigen/GERP scores, we have to lift over the coordinates. Path to liftover:
 liftoverPath=/nfs/users/nfs_d/ds26/bin/liftOver
