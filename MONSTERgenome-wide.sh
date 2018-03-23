@@ -28,6 +28,7 @@ export scriptDir="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 # phenotypeDir=/lustre/scratch115/projects/t144_helic_15x/analysis/HA/phenotypes/correct_names.andmissing
 
 # Default file with all the gene names (only on autosomes):
+
 geneListFile="${scriptDir}/gene_list.lst"
 
 # Kinship matrix file: # No longer hardwired, accepted as command line parameter.
@@ -160,7 +161,7 @@ if [ $# == 0 ]; then display_help; fi
 
 # Looping through all command line options:
 OPTIND=1
-while getopts ":hL:c:d:p:P:K:V:D:C:bi:g:m:s:l:e:x:k:t:ofw:j:B" optname; do
+while getopts ":hL:c:d:p:P:K:V:D:C:B:bi:g:m:s:l:e:x:k:t:ofw:j" optname; do
     case "$optname" in
       # Gene list related parameters:
         "L") geneListFile=${OPTARG} ;;
@@ -228,6 +229,21 @@ elif [[ ! -e $( echo "${vcfFile}" | sed -e 's/\%/12/') ]]; then
 else
     commandOptions=" --vcfFile ${vcfFile} "
 fi
+
+
+#############################################################################
+
+# check if it is a .vcf file with dosages
+CHROMLINE=$(zcat ${vcfFile} | grep -m 1 -nw "#CHROM"  | cut -f1 -d":")
+CHROMLINE=$((CHROMLINE + 1))
+GTGP=$(zcat ${vcfFile} | head -n $CHROMLINE | tail -n 1 | cut -f9)
+if [ $GTGP == "GT:GP" ] || [ $GTGP == "GP" ]; then
+    commandOptions="${commandOptions} --ifDosages 1"
+else
+    commandOptions="${commandOptions} --ifDosages 0"
+fi
+
+##################################################################
 
 # Gene list file (Is it set? Does it exists?):
 if [[ -z "${covarFile}" ]]; then
@@ -428,9 +444,13 @@ awk -v cn="${chunkNo}" -v cs="${chunkSize}" 'NR > (cn-1)*cs && NR <= cn*cs' ${ge
 # Entering working directory:
 cd ${workingDir}/gene_set.${chunkNo};
 
+
+
+
+
 # Reporting call:
-echo "${scriptDir}/${regionSelector}  --build $build --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log"
-${scriptDir}/${regionSelector}  --build $build --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log
+echo "${scriptDir}/${regionSelector}  --build ${build} --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log"
+${scriptDir}/${regionSelector}  --build ${build} --input input_gene.list --output gene_set_output ${commandOptions} --verbose > output.log
 
 # We are expecting to get 2 files: gene_set_output_genotype_file.txt & gene_set_output_SNPinfo_file.txt
 echo "[Info] Checking output..."
@@ -491,7 +511,7 @@ fi
 # So Monster can process it:
 
 # Get the phenotype:
-if [ -z $covarFile ]; then
+if [[ ! -z $covarFile ]]; then
     DIFF=$(diff <(cat $covarFile | tr ' ' '\t' | cut -f1) <(cat $phenotypeFile | tr ' ' '\t' | cut -f1)) 
     if [ "$DIFF" != "" ]; then
 	echo "The pheno file and covar file do not identical ID columns"
@@ -528,6 +548,8 @@ head -n1 gene_set_output_genotype_file.txt | tr "\t" "\n" | perl -lane 'BEGIN {f
 # Generate a mapping file that helps to convert HELIC IDs to numbers:
 echo "[Info] Generate sample mapping file."
 cut -f2 pheno.ordered.txt | awk '{printf "s/%s/%s/g\n", $1, NR+2 }' > sample.map.sed
+# put this line in as otherwise sed might replace substrings (because not told to match on whole word) of some IDs, generating wrong IDs
+cut -f2 pheno.ordered.txt | awk '{printf "s/\\b%s\\b/%s/g\n", $1, NR+2 }' > sample.map2.sed
 
 # Generate an inclusion list with the samples to be kept:
 cut -f2 pheno.ordered.txt > samples.to.keep.txt
@@ -538,8 +560,8 @@ R --slave -e 'library(data.table); mlong=fread("'$kinshipFile'"); tokeep=fread("
 
 # Adjust IDs and remove special characters from the snp, phenotype and genotype files:
 echo "[Info] Changing IDs and variant names."
-sed -i -f sample.map.sed pheno.ordered.txt
-sed -i -f sample.map.sed genotype.filtered.txt
+sed -i -f sample.map2.sed pheno.ordered.txt
+sed -i -f sample.map2.sed genotype.filtered.txt
 cat genotype.filtered.txt | perl -lane '$_ =~ s/[^0-9a-z\-\t\.]//gi; print $_'  > genotype.filtered.mod.txt
 cat gene_set_output_variant_file.txt | perl -lane '$_ =~ s/[^0-9a-z\t\.]//gi; $_ =~ s/Inf/0.0001/g; ;print $_'  > snpfile.mod.txt
 
