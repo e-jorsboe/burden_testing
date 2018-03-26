@@ -234,13 +234,14 @@ fi
 #############################################################################
 
 # check if it is a .vcf file with dosages
-CHROMLINE=$(zcat ${vcfFile} | grep -m 1 -nw "#CHROM"  | cut -f1 -d":")
+CHROMLINE=$(zcat $(echo ${vcfFile}| tr '%' '1') | grep -m 1 -nw "#CHROM"  | cut -f1 -d":")
 CHROMLINE=$((CHROMLINE + 1))
-GTGP=$(zcat ${vcfFile} | head -n $CHROMLINE | tail -n 1 | cut -f9)
-if [ $GTGP == "GT:GP" ] || [ $GTGP == "GP" ]; then
-    commandOptions="${commandOptions} --ifDosages 1"
-else
+GTGP=$(zcat $(echo ${vcfFile} | tr '%' '1') | head -n $CHROMLINE | tail -n 1 | cut -f9)
+#if [ $GTGP == "GT:GP" ] || [ $GTGP == "GP" ]; then
+if [ -z "$(echo $GTGP | fgrep GP)" ]; then
     commandOptions="${commandOptions} --ifDosages 0"
+else
+    commandOptions="${commandOptions} --ifDosages 1"
 fi
 
 ##################################################################
@@ -560,8 +561,16 @@ R --slave -e 'library(data.table); mlong=fread("'$kinshipFile'"); tokeep=fread("
 
 # Adjust IDs and remove special characters from the snp, phenotype and genotype files:
 echo "[Info] Changing IDs and variant names."
-sed -i -f sample.map2.sed pheno.ordered.txt
-sed -i -f sample.map2.sed genotype.filtered.txt
+#sed -i -f sample.map2.sed pheno.ordered.txt
+#sed -i -f sample.map2.sed genotype.filtered.txt
+
+# Added this as sed was leaving weird tmp files all over the place
+sed -f sample.map2.sed pheno.ordered.txt > pheno.ordered.txt.tmp
+sed -f sample.map2.sed genotype.filtered.txt > genotype.filtered.txt.tmp
+
+mv pheno.ordered.txt.tmp pheno.ordered.txt
+mv genotype.filtered.txt.tmp genotype.filtered.txt
+
 cat genotype.filtered.txt | perl -lane '$_ =~ s/[^0-9a-z\-\t\.]//gi; print $_'  > genotype.filtered.mod.txt
 cat gene_set_output_variant_file.txt | perl -lane '$_ =~ s/[^0-9a-z\t\.]//gi; $_ =~ s/Inf/0.0001/g; ;print $_'  > snpfile.mod.txt
 
