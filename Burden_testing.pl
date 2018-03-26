@@ -162,10 +162,14 @@ while ( my $ID = <$INPUT> ){
     
     # If the input is not a region a few extra steps will be taken:
     unless ($ID =~ /chr(\d+)_(\d+)-(\d+)/i){
-        #($chr, $start, $end, $stable_ID, $name) = $GENCODE_data->GetCoordinates($ID);
-        # SWAPPED AROUND stable_ID and name! - By Emil 22-03-2018
-	($chr, $start, $end, $name, $stable_ID) = $GENCODE_data->GetCoordinates($ID);
-
+        ($chr, $start, $end, $stable_ID, $name) = $GENCODE_data->GetCoordinates($ID);
+        
+	## Checks that fifth column is an Ensemble ID - GENCODE reads it is as the fifth column but returns it as the fourth
+	## Added by Emil 26-03-2018
+	if (! ($stable_ID =~ /^ENSG(\d+)$/) ) {
+	    die "Fifth column is not an Ensemble ID - pleae fix this!";	       
+	}
+	
         # Skipping genes that were not found in the GENCODE dataset.
         if ($start eq "NA") {
             print "[Warning] Gene $ID was not found in the GENCODE data. Is it a valid gene name? This gene will be skipped! [NO_GENE]\n";
