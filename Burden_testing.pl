@@ -166,7 +166,7 @@ while ( my $ID = <$INPUT> ){
         
 	## Checks that fifth column is an Ensemble ID - GENCODE reads it is as the fifth column but returns it as the fourth
 	## Added by Emil 26-03-2018
-	if (! ($stable_ID =~ /^ENSG(\d+)$/) ) {
+	if (! ($stable_ID =~ /^ENS(\d+)$/) ) {
 	    die "Fifth column is not an Ensemble ID - pleae fix this!";	       
 	}
 	
