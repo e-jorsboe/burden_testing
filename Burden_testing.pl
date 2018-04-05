@@ -159,15 +159,18 @@ while ( my $ID = <$INPUT> ){
     
     # At first we have to extract all the associated genomic coordinates for the gene.
     my ($chr, $start, $end, $stable_ID, $name, $CollapsedBed);
-    
+
     # If the input is not a region a few extra steps will be taken:
     unless ($ID =~ /chr(\d+)_(\d+)-(\d+)/i){
         ($chr, $start, $end, $stable_ID, $name) = $GENCODE_data->GetCoordinates($ID);
-        
+     
 	## Checks that fifth column is an Ensemble ID - GENCODE reads it is as the fifth column but returns it as the fourth
 	## Added by Emil 26-03-2018
-	if (! ($stable_ID =~ /^ENS(\d+)$/) ) {
-	    die "Fifth column is not an Ensemble ID - pleae fix this!";	       
+	if (! ($stable_ID =~ /^ENSG(\d+)$/) ) {
+	    print "Error for this gene:\n";
+	    print "$stable_ID\n";
+	    print "$name\n";
+	    die "Fifth column is not an Ensemble ID - please fix this!";	       
 	}
 	
         # Skipping genes that were not found in the GENCODE dataset.
